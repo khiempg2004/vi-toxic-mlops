@@ -1,0 +1,118 @@
+name: vitoxic
+
+x-hf-cache: &hf-cache ${HF_CACHE_DIR:-~/.cache/huggingface}:/cache/huggingface
+
+services:
+  vllm:
+    image: vllm/vllm-openai:${VLLM_VERSION:-v0.33.0}
+    command:
+      - --model=${BASE_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
+      - --enable-lora
+      - --max-lora-rank=64
+      - --max-loras=4
+      - --max-cpu-loras=16
+      - --max-model-len=2048
+      - --gpu-memory-utilization=0.85
+      - --port=8000
+    environment:
+      HF_HOME: /cache/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_ALLOW_RUNTIME_LORA_UPDATING: "True"
+    volumes:
+      - *hf-cache
+      - ./models:/models:ro
+    ports:
+      - "8001:8000"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${SERVE_GPU:-1}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: vitoxic-api:latest
+    environment:
+      VLLM_URL: http://vllm:8000
+      BASE_MODEL: ${BASE_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
+      MODELS_DIR: /models
+      VLLM_MODELS_DIR: /models
+      REQUEST_LOG: /app/logs/requests.jsonl
+      DRIFT_REPORT: /app/reports/drift_latest.json
+    volumes:
+      - ./models:/models:ro
+      - ./logs:/app/logs
+      - ./reports:/app/reports:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      vllm:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+  train:
+    profiles: ["train"]
+    build:
+      context: .
+      dockerfile: docker/train.Dockerfile
+    image: vitoxic-train:latest
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      HOME: /tmp
+      HF_HOME: /cache/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
+      WANDB_PROJECT: ${WANDB_PROJECT:-vi-toxic-mlops}
+      VITOXIC_ROOT: /workspace
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - *hf-cache
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${TRAIN_GPU:-0}"]
+              capabilities: [gpu]
+
+volumes:
+  prometheus-data:
+  grafana-data:

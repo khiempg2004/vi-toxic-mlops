@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: vitoxic
+    folder: vi-toxic
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

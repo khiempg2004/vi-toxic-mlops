@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --extra api --extra monitor --group dev
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Unit + integration tests (gồm baseline TF-IDF trên CPU & API với vLLM giả lập)
+        run: uv run pytest -q
+      - name: Docker compose config hợp lệ
+        run: docker compose config -q && docker compose --profile train config -q
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (& push trên main) image API
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/${{ github.repository_owner }}/vitoxic-api:${{ github.sha }},ghcr.io/${{ github.repository_owner }}/vitoxic-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build image huấn luyện (không push, kiểm tra Dockerfile)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/train.Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

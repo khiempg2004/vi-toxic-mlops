@@ -1,0 +1,79 @@
+defaults:
+  - model: qwen2.5-1.5b
+  - _self_
+
+seed: 42
+project: vi-toxic-mlops
+
+paths:
+  data_dir: data
+  raw_dir: ${paths.data_dir}/raw
+  processed_dir: ${paths.data_dir}/processed
+  stream_dir: ${paths.processed_dir}/stream
+  models_dir: models
+  reports_dir: reports
+  logs_dir: logs
+
+data:
+  hf_repo: uitnlp/vihsd
+  files:
+    train: train.csv
+    val: dev.csv
+    test: test.csv
+  # Phần train dùng để huấn luyện ban đầu; phần còn lại chia thành các đợt dữ liệu "đến dần".
+  base_fraction: 0.7
+  n_batches: 3
+  # Xác suất chèn teencode cho từng đợt -> mô phỏng trôi dữ liệu tăng dần.
+  batch_teencode_prob: [0.0, 0.4, 0.8]
+  test_teencode_prob: 0.6
+  max_chars: 512
+  # Số đợt dữ liệu mới (đã gán nhãn) được gộp vào tập huấn luyện.
+  batches_upto: 0
+
+baseline:
+  C: 4.0
+  max_iter: 2000
+
+train:
+  run_id: null
+  epochs: 2
+  lr: 2.0e-4
+  batch_size: 8        # effective batch = batch_size * grad_accum = 32
+  grad_accum: 4
+  max_length: 384
+  warmup_ratio: 0.03
+  weight_decay: 0.0
+  lr_scheduler: cosine
+  gradient_checkpointing: false
+  oversample_minority: true
+  minority_target_ratio: 0.5   # nâng mỗi lớp thiểu số lên >= ratio * lớp đông nhất
+  val_samples: 1000
+  eval_steps: 200
+  logging_steps: 20
+  wandb: true
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+serve:
+  vllm_url: http://localhost:8001
+  api_url: http://localhost:8000
+  vllm_models_dir: /models
+  timeout_s: 60
+
+eval:
+  concurrency: 64
+  sets: [test, test_teencode]
+  limit: null
+
+promote:
+  metric: macro_f1
+  min_delta: 0.005
+
+drift:
+  window: 2000
+  reference_samples: 5000
+  p_value: 0.01
+  share_threshold: 0.5

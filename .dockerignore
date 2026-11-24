@@ -1,0 +1,9 @@
+.git
+.venv
+data
+models
+logs
+reports
+wandb
+.env
+**/__pycache__

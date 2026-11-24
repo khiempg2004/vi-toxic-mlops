@@ -1,0 +1,40 @@
+stages:
+  prepare:
+    cmd: python -m vitoxic.data.prepare
+    deps:
+      - src/vitoxic/data
+      - src/vitoxic/labels.py
+    params:
+      - configs/config.yaml:
+          - seed
+          - data
+    outs:
+      - data/raw
+      - data/processed
+
+  baseline:
+    cmd: python -m vitoxic.baseline
+    deps:
+      - data/processed
+      - src/vitoxic/baseline.py
+    params:
+      - configs/config.yaml:
+          - baseline
+    outs:
+      - models/baseline
+    metrics:
+      - reports/baseline_metrics.json:
+          cache: false
+
+  train:
+    cmd: docker compose --profile train run --rm train python -m vitoxic.train_lora train.run_id=dvc-latest
+    deps:
+      - data/processed
+      - src/vitoxic/train_lora.py
+      - src/vitoxic/labels.py
+      - configs/model
+    params:
+      - configs/config.yaml:
+          - train
+    outs:
+      - models/candidates/dvc-latest

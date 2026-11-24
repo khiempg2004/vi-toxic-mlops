@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.env
+wandb/
+outputs/
+
+# Dữ liệu & mô hình do DVC quản lý / sinh ra lúc chạy
+/data
+/models
+/logs
+/reports/*
+!/reports/baseline_metrics.json

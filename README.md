@@ -72,3 +72,49 @@ Quy trình xung quanh dùng thêm:
 | Qwen2.5-1.5B-Instruct (chưa tinh chỉnh) | Mốc so sánh: chỉ dùng câu chỉ dẫn |
 | **Qwen2.5-1.5B-Instruct + LoRA** | **Mô hình chính**, tinh chỉnh trên ViHSD, phục vụ bằng vLLM |
 | Qwen2.5-3B-Instruct + LoRA | Mở rộng nếu còn thời gian, so sánh đánh đổi độ chính xác – độ trễ |
+
+## E. Cách chạy
+
+Yêu cầu: máy Linux có GPU NVIDIA (đã thử trên 2× RTX 4090), Docker + NVIDIA Container Toolkit, [uv](https://docs.astral.sh/uv/).
+
+```bash
+cp .env.example .env          # điền HF_TOKEN (bấm "Agree" tại huggingface.co/datasets/uitnlp/vihsd), WANDB_API_KEY (tuỳ chọn)
+make help                     # liệt kê lệnh
+make e2e                      # chạy toàn bộ kịch bản end-to-end (scripts/e2e.sh)
+```
+
+Từng bước:
+
+| Lệnh | Việc làm |
+|---|---|
+| `make setup` | Cài môi trường Python trên host (không cần torch), cấu hình DVC remote cục bộ |
+| `make data` | Tải ViHSD, chia `train_base` (70%) + 3 đợt dữ liệu đến dần (teencode 0% / 40% / 80%) + `test_teencode` |
+| `make baseline` | TF-IDF + LogReg (mốc so sánh, đồng thời là mô hình dự phòng của API) |
+| `make build && make serve` | vLLM (GPU1) + FastAPI + Prometheus + Grafana |
+| `make eval-zeroshot` | Đánh giá Qwen gốc chỉ dùng câu chỉ dẫn |
+| `make train ARGS="train.run_id=v1"` | Huấn luyện LoRA trên GPU0 (Hydra override được mọi tham số, vd. `model=qwen2.5-3b`) |
+| `make promote RUN=v1` | Đánh giá lại candidate và production trên cùng tập, chỉ triển khai nếu tốt hơn `min_delta` |
+| `make simulate SOURCE=batch_3` | Bắn lưu lượng vào API |
+| `make drift` | Kiểm tra trôi dữ liệu trên log API (KS test + báo cáo Evidently HTML) |
+| `make retrain UPTO=3` | Vòng tự động: drift? → gộp dữ liệu mới → train → so sánh → triển khai |
+| `make repro` | Tái lập `prepare → baseline → train` bằng DVC |
+| `make test` | pytest (CI chạy thêm ruff + build Docker) |
+
+Dịch vụ: API `:8000` (`/predict`, `/predict/batch`, `/health`, `/model`, `/metrics`), vLLM `:8001`, Prometheus `:9090`, Grafana `:3000` (dashboard *vi-toxic moderation*).
+
+### Kiến trúc mã nguồn
+
+```
+configs/                 Hydra: config.yaml + model/{qwen2.5-1.5b,qwen2.5-3b}.yaml
+src/vitoxic/
+  labels.py              Nhãn, prompt, parse đầu ra (dùng chung train/eval/serve)
+  data/prepare.py        Tải + chuẩn hoá + chia đợt dữ liệu; data/teencode.py: sinh nhiễu teencode
+  baseline.py            TF-IDF + LogReg
+  train_lora.py          Transformers Trainer + PEFT LoRA, chỉ tính loss trên phần nhãn
+  evaluate.py            Đánh giá mô hình đang phục vụ trên vLLM (macro-F1, độ trễ, throughput)
+  promote.py, registry.py  Cổng triển khai + registry dạng file (models/registry/production.json)
+  serving/app.py         FastAPI: tự nạp LoRA production vào vLLM lúc chạy, log yêu cầu, metric, dự phòng TF-IDF
+  monitoring/drift.py    Đặc trưng văn bản + KS test + Evidently
+  pipeline/retrain.py    Vòng huấn luyện lại tự động
+docker/, docker-compose.yml, monitoring/ (Prometheus, Grafana), dvc.yaml, .github/workflows/ci.yml
+```
